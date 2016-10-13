@@ -6,7 +6,7 @@ import numpy as np
 
 run_numbers = []
 run_numbers.append(35991)
-run_numbers.extend(range(35979,35983))
+run_numbers.append(range(35979,35983))
 run_numbers.append(35988)
 run_numbers.extend(range(35983,35985))
 
@@ -72,12 +72,13 @@ for i, run in enumerate(run_names):
         # multiple runs, average over all of them
         output_workspace = '&'.join(run) + integrate_suffix
         Mean(','.join(run), OutputWorkspace=output_workspace)
+        integrated_workspace = output_workspace
     else:
         # single run, use name as is
         output_workspace = run
+        integrated_workspace = output_workspace + integrate_suffix
 
     #integrate the run
-    integrated_workspace = output_workspace + integrate_suffix
     Integration(InputWorkspace=output_workspace, OutputWorkspace=integrated_workspace, **integration_range)
     w1=mtd[integrated_workspace]
 
