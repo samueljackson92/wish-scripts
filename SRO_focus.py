@@ -27,12 +27,10 @@ group_name = str(min_run) + '-' + str(max_run) + focused_suffix
 focused_workspaces = []
 for runno in run_numbers:
     run_number = str(runno)
+    raw_file = os.path.join(path, "WISH000" + run_number +'.raw')
     
-    raw_ws = 'WISH000'+run_number
-    raw_file = os.path.join(path, raw_ws +'.raw')
-    
-    LoadRaw(Filename=raw_file, OutputWorkspace=raw_ws)
-    CropWorkspace(InputWorkspace=raw_ws, OutputWorkspace=run_number, **crop_limits)
+    LoadRaw(Filename=raw_file, OutputWorkspace=run_number)
+    CropWorkspace(InputWorkspace=run_number, OutputWorkspace=run_number, **crop_limits)
     NormaliseByCurrent(InputWorkspace=run_number, OutputWorkspace=run_number)
     ConvertUnits(InputWorkspace=run_number, OutputWorkspace=run_number, Target='Wavelength')
     NormaliseToMonitor(InputWorkspace=run_number, OutputWorkspace=run_number, MonitorID=monitor_id)
@@ -47,7 +45,6 @@ for runno in run_numbers:
     SaveNexusProcessed(InputWorkspace=focused, Filename=os.path.join(output_path, focused_nxs))
 
     focused_workspaces.append(focused)
-    DeleteWorkspace(raw_ws)
     DeleteWorkspace(run_number)
     
 GroupWorkspaces(focused_workspaces, OutputWorkspace=group_name)

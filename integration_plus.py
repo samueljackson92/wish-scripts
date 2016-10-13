@@ -6,7 +6,7 @@ import numpy as np
 
 run_numbers = []
 run_numbers.append(35991)
-run_numbers.append(range(35979,35983))
+run_numbers.extend(range(35979,35983))
 run_numbers.append(35988)
 run_numbers.extend(range(35983,35985))
 
