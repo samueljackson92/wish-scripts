@@ -1,6 +1,7 @@
 from tube_calib_fit_params import TubeCalibFitParams
-from tube_calib import getCalibratedPixelPositions
+from tube_calib import getCalibratedPixelPositions, getPoints
 from tube_spec import TubeSpec
+from ideal_tube import IdealTube
 import numpy as np
 import tube
 
@@ -36,23 +37,22 @@ margin = 20
 fitPar = TubeCalibFitParams( [59, 161, 258, 353, 448])
 fitPar.setAutomatic(True)
 
-# Tube correction parameters
-correction_params = {
-    'threshold': 10,    # tolerance for a good peak fit
-    'n': 10                      # number of neighbouring tubes to use for interpolation
-}
-
 # ----------------------------------------------------------------------------------------------------
 
 instrument = ws.getInstrument()
 spec = TubeSpec(ws)
 spec.setTubeSpecByString(instrument.getFullName())
 
+idealTube = IdealTube()
+idealTube.setArray(lower_tube)
+
 # First calibrate all of the detectors
 calibrationTable, peaks = tube.calibrate(ws, spec, lower_tube, funcForm, margin=15,
     outputPeak=True, fitPar=fitPar)
 
 ApplyCalibration(ws_calib, calibrationTable)
+ApplyCalibration(ws_corr, calibrationTable)
+
 
 def findBadPeakFits(peaksTable, threshold=10):
     """ Find peaks whose fit values fall outside of a given tolerance
@@ -87,92 +87,40 @@ def findBadPeakFits(peaksTable, threshold=10):
     print "Problematic tubes are: " + str(problematic_tubes)
     return expected_peak_pos, problematic_tubes
 
+def cleanUpFit():
+    """Clean up workspaces created by calibration fitting """
+    for ws_name in ('TubePlot', 'RefittedPeaks', 'PolyFittingWorkspace',
+                            'QF_NormalisedCovarianceMatrix', 
+                            'QF_Parameters', 'QF_Workspace'):
+        try:
+            DeleteWorkspace(ws_name)
+        except:
+            pass
 
-def findTubeCenter(ws, tube):
-    """ Find the center point of a tubeCalibrationCorrection
+def correctMisalignedTubes(ws, calibrationTable, peaksTable, spec, idealTube, fitPar, threshold=10):
+    """ Correct misaligned tubes due to poor fitting results 
+    during the first round of calibration.
     
-    @param ws: the workspace to get the instrument geometry from
-    @param tube: the ordered list of detectors in the tube
-    @return V3D for the center of the tube
-    """
-    det0 = ws.getDetector(tube[0])
-    detN = ws.getDetector (tube[-1])
-    d0pos,dNpos = det0.getPos(), detN.getPos()
-    center = (dNpos+d0pos)*0.5
-    return center
-
-
-def findAdjacentTubes(index, tubeMap, spec, n=6):
-    """ Find tubes adjacent to the current index
+    Misaligned tubes are first identified according to a tolerance
+    applied to the absolute difference between the fitted tube 
+    positions and the mean across all tubes.
     
-    This makes the assumption that tubes are ordered spatially according to
-    there index which might be incorrect!
+    The FindPeaks algorithm is then used to find a better fit 
+    with the ideal tube positions as starting parameters 
+    for the peak centers.
     
-    If a tube is near the lower/upper range of tubes then the full set of may
-    not be used.
+    From the refitted peaks the positions of the detectors in the
+    tube are recalculated.
     
-    @param index: the index of tube to find neighbours for
-    @param spec: the tube spec for an instrument
-    @n: number of neighbours to use in averaging
-    @return a list of neighbouring tubes
-    """
-    # this is dodgy because we're assuming tubes with adjacent indicies are 
-    # spatially related.
-    offset = n / 2
-    name = spec.getTubeName(index)
-    index = int(name[-3:])
-    adjacent_indicies = np.arange(index-offset, index+offset+1)
-    
-    neighbours = []
-    for i in adjacent_indicies:
-        key = name[:-3] + str(i).zfill(3)
-        if i != index and i > 0 and i < spec.getNumTubes() and key in tubeMap:
-            neighbours.append(tubeMap[key])
-
-    return [spec.getTube(t)[0] for t in neighbours]
-
-
-def interpolateCorrectPositions(ws, dets, neighbours):
-    """ Calculate the correct position for a tube from its
-    neighbouring tubes
-    
-    @param ws: the workspace to correct tubes in
-    @param dets: list of detectors for single tube to correct
-    @param neighbours: list of neighbouring tubes to interpolate with
-    @return a list of corrected detector ids and a list of corrected positions
-    """
-    
-    centers = np.array([findTubeCenter(ws, t) for t in neighbours])
-    center_avg = centers.mean(axis=0)
-    
-    npos = np.array([[np.array(ws.getDetector(id).getPos()) for id in t] for t in neighbours])
-    positions = np.array([ws.getDetector(d).getPos() for d in dets])
-    ids = np.array([ws.getDetector(d).getID() for d in dets])
-    
-    positions = npos.mean(axis=0)
-
-    return ids, positions
-
-
-def tubeCalibrationCorrection(ws, peaksTable, calibrationTable, spec, threshold=10, n=6):
-    """ Perform corrections to an already calibrated set of tubes.
-    
-    This will find tubes which are incorrectly aligned after a tube calibration. 
-    The positions of the poorly fitted tubes will then be interploated from the 
-    positions of the surronding tubes.
-    
-    This will return a table workspace containing corrected detector positions
-    based on the interpolated positions of adjacent tubes which can be applied
-    using ApplyCalibration
-    
-    @param ws: the workspace to correct calibrated tubes for
-    @param peaksTable: the table of fitted peak centers from tube calibration
-    @param calibrationTable: the table of calibrated detectors from tube calibration
+    @param ws: the workspace to get the tube geometry from
+    @param calibrationTable: the calibration table ouput from running calibration
+    @param peaksTable: the table containing the fitted peak centers from calibration
     @param spec: the tube spec for the instrument
-    @param threshold: the threshold to use to decide if tubes are bad
-    @param n: the number of neighbouring tubes to use to interpolate the position
-    @return a table workspace containing corrected detector positions
-    """   
+    @param idealTube: the ideal tube for the instrument
+    @param fitPar: the fitting parameters for calibration
+    @param threshold: tolerance defining is a peak is outside of the acceptable range
+    @return table of corrected detector positions
+    """
     table_name = calibrationTable.name() + 'Corrected'
     corrections_table = CreateEmptyTableWorkspace(OutputWorkspace=table_name)
     corrections_table.addColumn('int', "Detector ID")
@@ -180,26 +128,22 @@ def tubeCalibrationCorrection(ws, peaksTable, calibrationTable, spec, threshold=
     
     mean_peaks, bad_tubes = findBadPeakFits(peaksTable, threshold)
 
-    print "Correcting badly fitted tubes"
-
-    tubeMap = {}
-    for index in range(1, spec.getNumTubes()+1):
-        name = spec.getTubeName(index)
-        tubeMap[name] = index
-        
     for index in bad_tubes:
-        print "Correcting tube %s" % spec.getTubeName(index)
-        dets, skipped = spec.getTube(index)
-
-        tubes = findAdjacentTubes(index, tubeMap, spec, n)
-        ids, positions = interpolateCorrectPositions(ws, dets, tubes)
+        print "Refitting tube %s" % spec.getTubeName(index)
+        tube_dets, _ = spec.getTube(index)
+        actualTube = getPoints(ws, idealTube.getFunctionalForms(), fitPar, tube_dets)
+        tube_ws = mtd['TubePlot']
+        fit_ws = FindPeaks(InputWorkspace=tube_ws, WorkspaceIndex=0, 
+                       PeakPositions=fitPar.getPeaks(), PeaksList='RefittedPeaks')
+        centers = [row['centre'] for row in fit_ws]
+        detIDList, detPosList = getCalibratedPixelPositions(ws, centers, idealTube.getArray(), tube_dets)
         
-        for id, pos in zip(ids, positions):
+        for id, pos in zip(detIDList, detPosList):
             corrections_table.addRow({'Detector ID': id, 'Detector Position': V3D(*pos)})
-
+            
+        cleanUpFit()
+    
     return corrections_table
 
-# Now correct any remaining outlying detectors using the average
-corrected_calibration_table = tubeCalibrationCorrection(ws_corr, peaks, calibrationTable, spec, **correction_params)
-        
+corrected_calibration_table = correctMisalignedTubes(ws_calib, calibrationTable, peaks, spec, idealTube, fitPar)
 ApplyCalibration(ws_corr, corrected_calibration_table)
