@@ -145,5 +145,5 @@ def correctMisalignedTubes(ws, calibrationTable, peaksTable, spec, idealTube, fi
     
     return corrections_table
 
-corrected_calibration_table = correctMisalignedTubes(ws_calib, calibrationTable, peaks, spec, idealTube, fitPar)
+corrected_calibration_table = correctMisalignedTubes(ws_corr, calibrationTable, peaks, spec, idealTube, fitPar)
 ApplyCalibration(ws_corr, corrected_calibration_table)
